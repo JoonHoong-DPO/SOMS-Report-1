@@ -1,0 +1,161 @@
+WITH  
+OMS as(
+	select
+	ipk.Id as ItemPackageId,
+	so.LegalEntity,
+	sw.WarehouseId, 
+	ist.ExpiryDate,
+	sum(OLD.SalesQty) as QtySalesOrdered,
+	--SUM( case when MONTH(so.CreatedAt) = 1 then OLD.SalesQty else 0 end) as M1,
+	--SUM( case when MONTH(so.CreatedAt) = 2 then OLD.SalesQty else 0 end) as M2,
+	--SUM( case when MONTH(so.CreatedAt) = 3 then OLD.SalesQty else 0 end) as M3,
+	--SUM( case when MONTH(so.CreatedAt) = 4 then OLD.SalesQty else 0 end) as M4,
+	--SUM( case when MONTH(so.CreatedAt) = 5 then OLD.SalesQty else 0 end) as M5,
+	--SUM( case when MONTH(so.CreatedAt) = 6 then OLD.SalesQty else 0 end) as M6,
+	--SUM( case when MONTH(so.CreatedAt) = 7 then OLD.SalesQty else 0 end) as M7,
+	--SUM( case when MONTH(so.CreatedAt) = 8 then OLD.SalesQty else 0 end) as M8,
+	--SUM( case when MONTH(so.CreatedAt) = 9 then OLD.SalesQty else 0 end) as M9,
+	--SUM( case when MONTH(so.CreatedAt) = 10 then OLD.SalesQty else 0 end) as M10,
+	--SUM( case when MONTH(so.CreatedAt) = 11 then OLD.SalesQty else 0 end) as M11,
+	--SUM( case when MONTH(so.CreatedAt) = 12 then OLD.SalesQty else 0 end) as M12,
+
+	max(CONVERT(DATE,so.CreatedAt)) as LastSalesDate
+
+	from stg_oms.SalesOrders so
+	left outer join stg_oms.SalesBasket SB on SB.SalesOrderId = so.Id
+	left outer join dbo.vw_OrderLineDetails_grouped OLD on OLD.SalesId = SB.Id
+	--inner join dbo.wj_PartnerSupplier wj on OLD.ItemId = wj.sku
+	left outer join stg_wms.Item i on OLD.ItemId = i.ItemNumber and so.LegalEntity = i.DataAreaId
+	left outer join stg_wms.ItemPackage ipk on i.Id = ipk.ItemId
+	left outer join stg_wms.ItemStockCount ist on ipk.Id = ist.ItemPackageId
+	left outer join stg_wms.SystemLegalEntityWarehouse sw on sb.InventLocationId = sw.InventLocationId and so.LegalEntity = sw.DataAreaId and sw.status = 1
+	inner join stg_wms.Web_WarehouseMaster wm on wm.Id = sw.WarehouseMasterId	
+	where so.CreatedAt >= '2022-01-01' -- DATEADD(MONTH, -12, GETDATE())
+	and so.Status in ('PICKED','MIX STATUSES','OPEN','RFC','REJECTED','HOLD','CC-Checking','CC Checking')
+	and sb.WMSStatus NOT IN ('CANCELLED_BY_SELLER','CANCELLED_BY_CUSTOMER','SHIPPED')
+	--and OLD.ItemId = 'B-5STR-011609' and so.LegalEntity = 'DMK' and sw.WarehouseId = 'PNI 001A'
+	group by
+	ipk.Id,
+	so.LegalEntity,
+	sw.WarehouseId
+	,ist.ExpiryDate
+)
+, oo as (
+	select so.SKU, so.LegalEntity, so.WarehouseCode,
+	sum( case when FORMAT(so.SB_DeliveryDate,'yyyy-MM-dd') between DateAdd(Day,1,FORMAT(GETDATE(),'yyyy-MM-dd'))  and DateAdd(Day,7,FORMAT(GETDATE(),'yyyy-MM-dd')) then so.SalesQty else 0 end) as QtyToPick_N7,
+	sum( case when FORMAT(so.SB_DeliveryDate,'yyyy-MM-dd') between DateAdd(Day,8,FORMAT(GETDATE(),'yyyy-MM-dd'))  and DateAdd(Day,30,FORMAT(GETDATE(),'yyyy-MM-dd')) then so.SalesQty else 0 end) as QtyToPick_N30,
+	sum( case when FORMAT(so.SB_DeliveryDate,'yyyy-MM-dd') between DateAdd(Day,31,FORMAT(GETDATE(),'yyyy-MM-dd')) and DateAdd(Day,60,FORMAT(GETDATE(),'yyyy-MM-dd')) then so.SalesQty else 0 end) as QtyToPick_N60,
+	sum( case when FORMAT(so.SB_DeliveryDate,'yyyy-MM-dd') between DateAdd(Day,61,FORMAT(GETDATE(),'yyyy-MM-dd')) and DateAdd(Day,90,FORMAT(GETDATE(),'yyyy-MM-dd')) then so.SalesQty else 0 end) as QtyToPick_N90,
+	
+	sum( case when (FORMAT(so.SB_DeliveryDate,'yyyy-MM-dd') >= DateAdd(Day,91,FORMAT(GETDATE(),'yyyy-MM-dd')) 
+	               or so.SB_DeliveryDate is null) then so.SalesQty else 0 end) as QtyToPick_N120,
+	--sum(SalesQty) as QtyToPick
+	(
+	sum( case when FORMAT(so.SB_DeliveryDate,'yyyy-MM-dd') between DateAdd(Day,1,FORMAT(GETDATE(),'yyyy-MM-dd'))  and DateAdd(Day,7,FORMAT(GETDATE(),'yyyy-MM-dd')) then so.SalesQty else 0 end) +
+	sum( case when FORMAT(so.SB_DeliveryDate,'yyyy-MM-dd') between DateAdd(Day,8,FORMAT(GETDATE(),'yyyy-MM-dd'))  and DateAdd(Day,30,FORMAT(GETDATE(),'yyyy-MM-dd')) then so.SalesQty else 0 end) +
+	sum( case when FORMAT(so.SB_DeliveryDate,'yyyy-MM-dd') between DateAdd(Day,31,FORMAT(GETDATE(),'yyyy-MM-dd')) and DateAdd(Day,60,FORMAT(GETDATE(),'yyyy-MM-dd')) then so.SalesQty else 0 end) +
+	sum( case when FORMAT(so.SB_DeliveryDate,'yyyy-MM-dd') between DateAdd(Day,61,FORMAT(GETDATE(),'yyyy-MM-dd')) and DateAdd(Day,90,FORMAT(GETDATE(),'yyyy-MM-dd')) then so.SalesQty else 0 end) +
+	sum( case when (FORMAT(so.SB_DeliveryDate,'yyyy-MM-dd') >= DateAdd(Day,91,FORMAT(GETDATE(),'yyyy-MM-dd')) 
+	               or so.SB_DeliveryDate is null) then so.SalesQty else 0 end)
+	) as QtyToPick
+	from dbo.vw_oms_partner so
+	--inner join dbo.wj_PartnerSupplier wj on so.SKU  = wj.sku
+	where so.SO_Status = 'OPEN' and so.sku is not null and so.WarehouseCode is not null
+	and so.LineStatus not in ('Cancelled by Customer','Cancelled by Seller')
+	and so.SO_CreatedAt >= '2022-01-01' -- DATEADD(YEAR, -1, GETDATE())
+	group by so.SKU, so.LegalEntity, so.WarehouseCode
+)
+--,IM as (
+--	select
+--	ItemPackageId, ItemNumber, LegalEntity, WarehouseCode, SUM([Qty On Hand]) as QtyOnHand, SUM([Qty To Pick]) as QtyToPick, SUM([Qty Sellable]) as QtySellable
+--	from dbo.vw_inventory_movement im
+--	left outer join stg_capsul.Products p on p.SKU = im.ItemNumber
+--	where TodayDate = FORMAT(GETDATE(),'yyyy-MM-dd')
+--	and p.type in ( 'Sample','Product' )
+--	group by ItemPackageId, ItemNumber, LegalEntity, WarehouseCode--, [Qty On Hand], [Qty To Pick], [Qty Sellable]
+--)
+
+
+--select * from (
+
+select
+W.BrandName, W.SKUName as SKUNameCode, W.SKU_Name, W.SKU_No, W.LegalEntity, W.WarehouseCode, W.WarehouseName, W.WarehouseNameCode, W.WarehouseType, 
+W.ExpiryDate, W.ExpiredProduct_YN,
+W.UOM, 
+case when W.ItemCount is null then 0 else W.ItemCount end as ItemCount,
+case when W.ItemCount is null then 0 else W.ItemCount end as ItemCount_Ori,
+W.Weight_KG, W.Volume_M3, 
+--IM.QtyOnHand, 
+case when W.ItemCount is null then 0 else W.ItemCount end as QtyOnHand,
+--IM.QtyToPick, 
+case when oo.QtyToPick is null then 0 else oo.QtyToPick end as QtyToPick,
+--IM.QtySellable,
+W.ItemCount - case when oo.QtyToPick is null then 0 else oo.QtyToPick end as QtySellable,
+W.InventoryQtyCategory, W.UpdDate, W.Category, W.Country, 
+W.AllocatedQty, W.QuarantineQty, W.ShelfLife, W.SelfLifeRemaining, W.StockReceivedDate,
+case when W.QuarantineQty <> 0 then 'Quarantine'
+     when W.QuarantineQty = 0 then
+		  case when W.ExpiredProduct_YN = 'Yes' then 'Expired'
+			   else case when (W.ItemCount + W.QuarantineQty) >= 0 and ROUND(W.SelfLifeRemaining,2) > 0.25 and O.LastSalesDate < DateAdd(Month,-12,getdate()) then 'Slow inventory'
+				          when (W.ItemCount + W.QuarantineQty) >= 0 and ROUND(W.SelfLifeRemaining,2) > 0.25 and O.LastSalesDate < DateAdd(Month,-9,getdate()) then 'Slow inventory'
+						  when (W.ItemCount + W.QuarantineQty) >= 0 and ROUND(W.SelfLifeRemaining,2) > 0.25 and O.LastSalesDate < DateAdd(Month,-6,getdate()) then 'Slow inventory'
+						  when (W.ItemCount + W.QuarantineQty) >= 0 and ROUND(W.SelfLifeRemaining,2) > 0.25 and O.LastSalesDate < DateAdd(Month,-4,getdate()) then 'Slow inventory'
+						  when (W.ItemCount + W.QuarantineQty) >= 0 and ROUND(W.SelfLifeRemaining,2) > 0.25 and O.LastSalesDate < DateAdd(Month,-3,getdate()) then 'Slow inventory'
+		                  else case when (W.ItemCount + W.QuarantineQty) >= 0 and ROUND(W.SelfLifeRemaining,2) between 0.00 and 0.25 then 'Near-expiry inventory'
+						           else 'Regular inventory'
+							  end
+		            end
+		  end
+end as BasketType,
+case when W.QuarantineQty <> 0 then 'Yes'
+     when W.QuarantineQty = 0 then
+		  case when W.ExpiredProduct_YN = 'Yes' then 'Yes'
+			   else case when (W.ItemCount + W.QuarantineQty) >= 0 and ROUND(W.SelfLifeRemaining,2) > 0.25 and O.LastSalesDate < DateAdd(Month,-12,getdate()) then 'No sales L12M'
+				          when (W.ItemCount + W.QuarantineQty) >= 0 and ROUND(W.SelfLifeRemaining,2) > 0.25 and O.LastSalesDate < DateAdd(Month,-9,getdate()) then 'No sales L9M'
+						  when (W.ItemCount + W.QuarantineQty) >= 0 and ROUND(W.SelfLifeRemaining,2) > 0.25 and O.LastSalesDate < DateAdd(Month,-6,getdate()) then 'No sales L6M'
+						  when (W.ItemCount + W.QuarantineQty) >= 0 and ROUND(W.SelfLifeRemaining,2) > 0.25 and O.LastSalesDate < DateAdd(Month,-4,getdate()) then 'No sales L4M'
+						  when (W.ItemCount + W.QuarantineQty) >= 0 and ROUND(W.SelfLifeRemaining,2) > 0.25 and O.LastSalesDate < DateAdd(Month,-3,getdate()) then 'No sales L3M'
+		                 else case when (W.ItemCount + W.QuarantineQty) >= 0 and ROUND(W.SelfLifeRemaining,2) between 0.00 and 0.25 then 'Yes'
+						           else 'Yes'
+							  end
+		            end
+		  end
+end as Basket,
+W.ItemPackageId,
+
+O.LastSalesDate,
+
+--case when O.M1 is null then 0 else O.M1 end as SalesJan,
+--case when O.M2 is null then 0 else O.M2 end as SalesFeb,
+--case when O.M3 is null then 0 else O.M3 end as SalesMar,
+--case when O.M4 is null then 0 else O.M4 end as SalesApr,
+--case when O.M5 is null then 0 else O.M5 end as SalesMay,
+--case when O.M6 is null then 0 else O.M6 end as SalesJun,
+--case when O.M7 is null then 0 else O.M7 end as SalesJul,
+--case when O.M8 is null then 0 else O.M8 end as SalesAug,
+--case when O.M9 is null then 0 else O.M9 end as SalesSep,
+--case when O.M10 is null then 0 else O.M10 end as SalesOct,
+--case when O.M11 is null then 0 else O.M11 end as SalesNov,
+--case when O.M12 is null then 0 else O.M12 end as SalesDec,
+st
+case when (W.ItemCount + W.QuarantineQty) >= 0 and ROUND(W.SelfLifeRemaining,2) between 0.00 and 0.25 
+     then case when W.ItemCount is null then 0 else W.ItemCount end
+	 else 0
+end as 'Near-expiry inventory',
+case when W.ExpiredProduct_YN = 'Yes'
+     then case when W.ItemCount is null then 0 else W.ItemCount end
+	 else 0
+end as 'Expired inventory'
+from dbo.vw_wms_report W
+--inner join dbo.wj_PartnerSupplier wj on W.SKU_No = wj.sku
+left outer join oo /*IM*/ on oo.SKU = W.SKU_No
+					  and oo.LegalEntity = W.LegalEntity
+					  and oo.WarehouseCode = W.WarehouseCode
+left outer join OMS O on O.ItemPackageId = W.ItemPackageId
+                     and O.LegalEntity = W.LegalEntity
+					 and O.WarehouseId = W.WarehouseCode
+					 and O.ExpiryDate = W.ExpiryDate
+
+--) m
+------where m.QuarantineQty > 0
+--where m.Basket = 'No sales L6M'
